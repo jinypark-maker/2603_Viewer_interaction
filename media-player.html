@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Video Player – Interaction Prototype</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<link rel="preload" as="image" href="https://www.figma.com/api/mcp/asset/004c5409-2ddb-4b32-b41f-1320cecb0a5f">
+<link rel="preload" as="image" href="https://www.figma.com/api/mcp/asset/23a8269e-c0a4-4f5b-b8ce-54cb0af008dd">
+<link rel="preload" as="image" href="https://www.figma.com/api/mcp/asset/629f7104-0388-4d8d-9fad-215ba07a2d64">
+<link rel="preload" as="image" href="https://www.figma.com/api/mcp/asset/ab5d4cf6-9614-4f01-a1e3-158682a42505">
+<link rel="preload" as="image" href="https://www.figma.com/api/mcp/asset/6a8c1e37-c717-4f3c-9669-0617cb2c3aee">
+<link rel="preload" as="image" href="https://www.figma.com/api/mcp/asset/2f5bb13f-5523-417e-bff4-79462322f292">
+<link rel="preload" as="image" href="https://www.figma.com/api/mcp/asset/cf305094-88ea-422a-9581-0029479599e4">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:#111;display:flex;align-items:center;justify-content:center;overflow:hidden}
+
+  /* Center controls – only animate on appear, GPU-accelerated */
+  @keyframes centerIn{0%{opacity:0;transform:translate(-50%,-50%) scale(.8)}100%{opacity:1;transform:translate(-50%,-50%) scale(1)}}
+  @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+  @keyframes toastIn{0%{opacity:0;transform:translate(-50%,-50%) scale(.9)}100%{opacity:1;transform:translate(-50%,-50%) scale(1)}}
+  @keyframes toastOut{0%{opacity:1}100%{opacity:0}}
+
+  /* ── Gesture animation keyframes ── */
+  /* Overlay: fade-in-out 0.6s + scale 1→1.2→1, masked to media area */
+  @keyframes gestOverlay{
+    0%{opacity:0;transform:scale(1)}
+    50%{opacity:1;transform:scale(1.2)}
+    100%{opacity:0;transform:scale(1)}
+  }
+  /* Arrow: fade-in-out 0.6s */
+  @keyframes gestArrow{
+    0%{opacity:0}
+    50%{opacity:1}
+    100%{opacity:0}
+  }
+  /* Text: fade-in 0.3s */
+  @keyframes gestTextIn{
+    from{opacity:0}to{opacity:1}
+  }
+  /* Text: fade-out 0.3s, starts after delay */
+  @keyframes gestTextOut{
+    from{opacity:1}to{opacity:0}
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useRef,useCallback}=React;
+
+/* ═══════════════════════════════════════════════════
+   Video Player Interaction Prototype
+   – Figma-accurate UI with full interaction spec
+   ═══════════════════════════════════════════════════ */
+
+// Figma Asset URLs (valid 7 days)
+const A={
+  video:"https://www.figma.com/api/mcp/asset/99a9b81c-b75d-4fbc-ba79-df2df4f1921a",
+  soundOn:"https://www.figma.com/api/mcp/asset/629f7104-0388-4d8d-9fad-215ba07a2d64",
+  soundOff:"https://www.figma.com/api/mcp/asset/ab5d4cf6-9614-4f01-a1e3-158682a42505",
+  soundMuteSpeaker:"https://www.figma.com/api/mcp/asset/ff89d62a-826a-46fd-912b-e44a13c2e213",
+  soundMuteX:"https://www.figma.com/api/mcp/asset/9b416eed-cec7-4968-a1aa-f0f09b365ad9",
+  skipBackUnion:"https://www.figma.com/api/mcp/asset/6a8c1e37-c717-4f3c-9669-0617cb2c3aee",
+  skipBackText:"https://www.figma.com/api/mcp/asset/751dab11-9676-4a41-bbd1-db3030a56feb",
+  skipFwdUnion:"https://www.figma.com/api/mcp/asset/2f5bb13f-5523-417e-bff4-79462322f292",
+  pauseIcon:"https://www.figma.com/api/mcp/asset/004c5409-2ddb-4b32-b41f-1320cecb0a5f",
+  playIcon:"https://www.figma.com/api/mcp/asset/23a8269e-c0a4-4f5b-b8ce-54cb0af008dd",
+  gestureEllipse:"https://www.figma.com/api/mcp/asset/e4d4216e-dbae-43d4-8475-382ee456b7c4",
+  gestureArrow:"https://www.figma.com/api/mcp/asset/cf305094-88ea-422a-9581-0029479599e4",
+  closeX1:"https://www.figma.com/api/mcp/asset/f02e36e3-e4c6-41da-9a72-3df0e86ff4a7",
+  closeX2:"https://www.figma.com/api/mcp/asset/45f151fc-08e8-4904-b734-ebd02a3c3b8a",
+};
+
+const S={UI_OFF:"UI_OFF",UI_ON_BOTTOM:"UI_ON_BOTTOM",UI_ON:"UI_ON",PAUSED:"PAUSED"};
+const SOUND={ON:"ON",OFF:"OFF",MUTE:"MUTE"};
+
+function fmt(sec){const m=Math.floor(sec/60),s=Math.floor(sec%60);return`${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`}
+
+// ─── Status Bar ───
+function StatusBar(){
+  return(
+    <div style={{position:"absolute",top:0,left:0,right:0,zIndex:30,display:"flex",justifyContent:"space-between",alignItems:"center",padding:"17px 26px 0 28px",height:44}}>
+      <span style={{color:"#fff",fontSize:15,fontWeight:600,fontFamily:"SF Pro Text,system-ui,sans-serif"}}>9:41</span>
+      <div style={{display:"flex",gap:5,alignItems:"center"}}>
+        <svg width="17" height="11" viewBox="0 0 17 11" fill="none"><rect x=".5" y="3.5" width="3" height="7" rx=".8" fill="#fff"/><rect x="4.8" y="2" width="3" height="9" rx=".8" fill="#fff"/><rect x="9.1" y="0" width="3" height="11" rx=".8" fill="#fff"/><rect x="13.4" y="2" width="3" height="9" rx=".8" fill="rgba(255,255,255,.3)"/></svg>
+        <svg width="15" height="11" viewBox="0 0 15 11" fill="none"><path d="M7.5 2.5C5.6 2.5 3.8 3.2 2.5 4.5L1 3C2.7 1.3 5 .3 7.5.3S12.3 1.3 14 3L12.5 4.5C11.2 3.2 9.4 2.5 7.5 2.5Z" fill="#fff"/><path d="M7.5 5.5C6.3 5.5 5.2 6 4.4 6.8L3 5.4C4.2 4.2 5.8 3.5 7.5 3.5S10.8 4.2 12 5.4L10.6 6.8C9.8 6 8.7 5.5 7.5 5.5Z" fill="#fff"/><path d="M9.2 9.2L7.5 11 5.8 9.2C6.3 8.7 6.9 8.4 7.5 8.4S8.7 8.7 9.2 9.2Z" fill="#fff"/></svg>
+        <svg width="25" height="12" viewBox="0 0 25 12" fill="none"><rect x=".5" y=".5" width="21" height="11" rx="3" stroke="rgba(255,255,255,.35)" fill="none"/><rect x="22.5" y="3.5" width="1.5" height="5" rx=".75" fill="rgba(255,255,255,.4)"/><rect x="2" y="2" width="18" height="8" rx="1.5" fill="#fff"/></svg>
+      </div>
+    </div>
+  );
+}
+
+// ─── Close Button ───
+function CloseBtn(){
+  return(
+    <div data-control="true" onClick={e=>e.stopPropagation()} style={{position:"absolute",top:48,right:14,zIndex:30,width:24,height:24,cursor:"pointer"}}>
+      <div style={{position:"absolute",left:"50%",top:"50%",transform:"translate(calc(-50% + 0.14px),calc(-50% + 0.14px))",width:14.053,height:14.053}}>
+        <div style={{position:"absolute",inset:"-3.77%"}}>
+          <img src={A.closeX1} style={{display:"block",width:"100%",height:"100%"}} alt=""/>
+        </div>
+      </div>
+      <div style={{position:"absolute",left:"50%",top:"50%",transform:"translate(calc(-50% + 0.14px),calc(-50% + 0.14px))",width:14.053,height:14.053}}>
+        <div style={{position:"absolute",inset:"-3.77%"}}>
+          <img src={A.closeX2} style={{display:"block",width:"100%",height:"100%"}} alt=""/>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Home Indicator ───
+function HomeIndicator(){
+  return <div style={{position:"absolute",bottom:8,left:"50%",transform:"translateX(-50%)",width:134,height:5,borderRadius:100,background:"#fff",zIndex:30}}/>;
+}
+
+// ─── Sound Icon (24x24, all states pre-rendered, zero transition animation) ───
+function SoundIcon({soundState}){
+  // All 3 states always mounted, toggled by opacity → no re-mount flicker
+  const abs={position:"absolute",left:0,top:0,display:"block"};
+  return(
+    <div style={{position:"relative",width:24,height:24,flexShrink:0}}>
+      {/* ON: 20.75×18.04 centered in 24×24 */}
+      <img src={A.soundOn} style={{...abs,left:1.63,top:2.98,width:20.75,height:18.04,
+        opacity:soundState===SOUND.ON?1:0}} alt=""/>
+      {/* OFF: 24×24 full */}
+      <img src={A.soundOff} style={{...abs,width:24,height:24,
+        opacity:soundState===SOUND.OFF?1:0}} alt=""/>
+      {/* MUTE: speaker 12.65×17.84 + X 5.99×5.99 */}
+      <img src={A.soundMuteSpeaker} style={{...abs,left:3,top:3.08,width:12.65,height:17.84,
+        opacity:soundState===SOUND.MUTE?1:0}} alt=""/>
+      <img src={A.soundMuteX} style={{position:"absolute",right:1.5,top:9,width:5.99,height:5.99,display:"block",
+        opacity:soundState===SOUND.MUTE?1:0}} alt=""/>
+    </div>
+  );
+}
+
+// ─── Toast ───
+function Toast({text,visible,phase}){
+  if(!visible) return null;
+  return(
+    <div style={{
+      position:"absolute",top:"50%",left:"50%",
+      transform:"translate(-50%,-50%)",zIndex:35,
+      animation:phase==="out"?"toastOut .3s ease-out forwards":"toastIn .2s ease-out",
+    }}>
+      <div style={{
+        background:"rgba(0,0,0,0.8)",borderRadius:5,padding:"19px 21px",
+        minWidth:200,textAlign:"center",
+      }}>
+        <span style={{color:"#fff",fontSize:14,fontFamily:"SF Pro Text,system-ui,sans-serif"}}>
+          {text}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ─── Skip10s Button ───
+function SkipBtn({direction,onClick,pressed}){
+  const isBack=direction==="back";
+  return(
+    <div data-control="true" onClick={e=>{e.stopPropagation();onClick()}}
+      style={{width:40,height:40,position:"relative",cursor:"pointer",flexShrink:0,overflow:"visible",
+        opacity:pressed?.7:1,transition:"opacity .1s"}}>
+      <div style={{position:"absolute",inset:"9.25%",
+        transform:isBack?"rotate(180deg) scaleY(-1)":"none"}}>
+        <div style={{position:"absolute",inset:"-5.56%"}}>
+          <img src={isBack?A.skipBackUnion:A.skipFwdUnion} style={{display:"block",width:"100%",height:"100%"}} alt=""/>
+        </div>
+      </div>
+      <div style={{position:"absolute",left:13,top:15,width:14,height:10}}>
+        <div style={{position:"absolute",top:"-8.14%",right:"-5.83%",bottom:"-11.42%",left:"-9.5%"}}>
+          <img src={A.skipBackText} style={{display:"block",width:"100%",height:"100%"}} alt=""/>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Play/Pause Icon (pre-rendered, opacity toggle) ───
+// 67×67 영역, Figma 원본 inset 값으로 배치
+// Pause: inset [18.28% 28.36% 18.28% 28.36%] → 대칭
+// Play:  inset [17.16% 18.72% 17.16% 28.51%] → 광학 보정 (오른쪽 시프트)
+function PlayPauseIcon({isPlaying,onClick}){
+  return(
+    <div data-control="true" onClick={e=>{e.stopPropagation();onClick()}}
+      style={{width:67,height:67,position:"relative",cursor:"pointer",flexShrink:0}}>
+      {/* Pause – 대칭 배치 */}
+      <div style={{position:"absolute",top:"18.28%",right:"28.36%",bottom:"18.28%",left:"28.36%",
+        opacity:isPlaying?1:0}}>
+        <div style={{position:"absolute",inset:"-9.88% -14.49%"}}>
+          <img src={A.pauseIcon} style={{display:"block",width:"100%",height:"100%"}} alt=""/>
+        </div>
+      </div>
+      {/* Play – 광학 보정 (left:28.51% > right:18.72%) */}
+      <div style={{position:"absolute",top:"17.16%",right:"18.72%",bottom:"17.16%",left:"28.51%",
+        opacity:isPlaying?0:1}}>
+        <div style={{position:"absolute",top:"-5.27%",right:"-6.04%",bottom:"-5.27%",left:"-10.83%"}}>
+          <img src={A.playIcon} style={{display:"block",width:"100%",height:"100%"}} alt=""/>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Gesture Feedback (double-tap) ───
+// Overlay spec:
+//   color: #FFFFFF 20%
+//   width: screen.width (375)
+//   height: radial gradient – inner 667*1.2=800, outer 667*1.5=1000
+//   position: centered (x: screen center, y: center align to video)
+// Animation spec:
+//   overlay: fade-in-out 0.6s (opacity 0→1→0, scale 0.8→1→0.8), easeOut
+//   arrow1: fade-in-out 0.6s, delay 0s
+//   arrow2: fade-in-out 0.6s, delay 0.2s
+//   arrow3: fade-in-out 0.6s, delay 0.4s
+//   text: fade-in 0.3s, then fade-out 0.3s with delay 0.7s
+//   Total ~1.0s
+function GestureFeedback({direction,gestureKey}){
+  const[active,setActive]=useState(false);
+  const[prevKey,setPrevKey]=useState(null);
+
+  useEffect(()=>{
+    if(gestureKey&&gestureKey!==prevKey){
+      setPrevKey(gestureKey);
+      setActive(true);
+      const t=setTimeout(()=>setActive(false),1100);
+      return()=>clearTimeout(t);
+    }
+  },[gestureKey]);
+
+  if(!active)return null;
+  const isFwd=direction==="forward";
+
+  // ── Overlay: Figma exact positions ──
+  // Base size: 334×663
+  // Right (forward): left:208, top:78
+  // Left  (back):    left:-167, top:78
+  // Color: solid #FFFFFF 20%
+
+  return(
+    <div key={gestureKey} style={{position:"absolute",left:0,top:78,width:375,height:667,zIndex:35,pointerEvents:"none",overflow:"hidden"}}>
+      {/* ── Overlay: SOLID ellipse, rgba(255,255,255,0.20) ── */}
+      <div style={{
+        position:"absolute",
+        width:334,height:663,
+        left:isFwd?208:-167,
+        top:0,
+        borderRadius:"50%",
+        background:"rgba(255,255,255,0.20)",
+        transformOrigin:"center center",
+        animation:"gestOverlay 0.6s ease-out forwards",
+        willChange:"opacity,transform",
+      }}/>
+
+      {/* ── Arrows + text at Figma position ── */}
+      {/* Figma: left:248 top:384 w:87 (forward), mirrored for back */}
+      <div style={{
+        position:"absolute",
+        left:isFwd?248:undefined,right:isFwd?undefined:248,
+        top:306,width:87,
+        display:"flex",flexDirection:"column",alignItems:"center",gap:8,
+        transform:isFwd?"none":"scaleX(-1)",
+      }}>
+        {/* 3 arrows with staggered fade-in-out */}
+        <div style={{width:87,height:33,display:"flex",justifyContent:"center",alignItems:"center",gap:4}}>
+          {[0,0.2,0.4].map((delay,i)=>(
+            <div key={i} style={{width:25,height:33,position:"relative",flexShrink:0,
+              opacity:0,
+              animation:`gestArrow 0.6s ease-out ${delay}s forwards`,
+              willChange:"opacity"}}>
+              <img src={A.gestureArrow} style={{display:"block",width:"100%",height:"100%"}} alt=""/>
+            </div>
+          ))}
+        </div>
+        {/* "10초" text */}
+        <span style={{
+          fontFamily:"SF Pro,system-ui,sans-serif",fontWeight:700,fontSize:14,
+          color:"#fff",textShadow:"0 0 1px rgba(0,0,0,.45)",letterSpacing:-.14,
+          transform:isFwd?"none":"scaleX(-1)",
+          opacity:0,
+          animation:"gestTextIn 0.3s ease-out forwards, gestTextOut 0.3s ease-out 0.7s forwards",
+          willChange:"opacity",
+        }}>10초</span>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════
+//  Main Player
+// ═══════════════════════════════════
+function MediaPlayer(){
+  const[uiState,setUiState]=useState(S.UI_ON_BOTTOM);
+  const[isPlaying,setIsPlaying]=useState(true);
+  const[currentTime,setCurrentTime]=useState(0);
+  const[soundState,setSoundState]=useState(SOUND.ON);
+  const[gestureDir,setGestureDir]=useState("forward");
+  const[gestureKey,setGestureKey]=useState(null);
+  const[toast,setToast]=useState({visible:false,text:"",phase:"in"});
+  const[isDragging,setIsDragging]=useState(false);
+  const[skipPressed,setSkipPressed]=useState(null);
+  const[skipJump,setSkipJump]=useState(false);
+  // Track if initial render to skip animations
+  const[mounted,setMounted]=useState(false);
+
+  const duration=150;
+  const timerRef=useRef(null);
+  const animRef=useRef(null);
+  const lastTickRef=useRef(Date.now());
+  const progressRef=useRef(null);
+  const tapTimeoutRef=useRef(null);
+  const lastTapRef=useRef(0);
+  const toastTimeoutRef=useRef(null);
+
+  useEffect(()=>{requestAnimationFrame(()=>setMounted(true))},[]);
+
+  // Auto-hide
+  const clearAutoHide=useCallback(()=>{if(timerRef.current){clearTimeout(timerRef.current);timerRef.current=null}},[]);
+  const startAutoHide=useCallback(()=>{
+    clearAutoHide();
+    timerRef.current=setTimeout(()=>{
+      setUiState(p=>(p===S.UI_ON_BOTTOM||p===S.UI_ON)?S.UI_OFF:p);
+    },3000);
+  },[clearAutoHide]);
+  const resetTimer=useCallback(()=>{
+    setUiState(p=>{if(p===S.UI_ON_BOTTOM||p===S.UI_ON)startAutoHide();return p});
+  },[startAutoHide]);
+
+  useEffect(()=>{startAutoHide();return clearAutoHide},[]);
+
+  // Playback
+  useEffect(()=>{
+    if(isPlaying&&!isDragging){
+      const tick=()=>{
+        const now=Date.now(),d=(now-lastTickRef.current)/1000;
+        lastTickRef.current=now;
+        setCurrentTime(t=>{const n=t+d;if(n>=duration){setIsPlaying(false);return duration}return n});
+        animRef.current=requestAnimationFrame(tick);
+      };
+      lastTickRef.current=Date.now();
+      animRef.current=requestAnimationFrame(tick);
+    }
+    return()=>{if(animRef.current)cancelAnimationFrame(animRef.current)};
+  },[isPlaying,isDragging]);
+
+  // Skip – set skipJump to disable progress bar transition
+  const doSkip=useCallback(dir=>{
+    setSkipJump(true);
+    setCurrentTime(t=>Math.max(0,Math.min(duration,t+(dir==="forward"?10:-10))));
+    requestAnimationFrame(()=>requestAnimationFrame(()=>setSkipJump(false)));
+  },[duration]);
+
+  // Gesture – triggers CSS animation via key change
+  const showGesture=useCallback(dir=>{
+    setGestureDir(dir);
+    setGestureKey(Date.now()); // new key = new animation
+  },[]);
+
+  // Toast
+  const showToast=useCallback(text=>{
+    if(toastTimeoutRef.current)clearTimeout(toastTimeoutRef.current);
+    setToast({visible:true,text,phase:"in"});
+    toastTimeoutRef.current=setTimeout(()=>{
+      setToast(t=>({...t,phase:"out"}));
+      setTimeout(()=>setToast({visible:false,text:"",phase:"in"}),300);
+    },1500);
+  },[]);
+
+  // Tap/Double-tap
+  const handleScreenTap=useCallback(e=>{
+    if(e.target.closest("[data-control]"))return;
+    const now=Date.now(),x=e.clientX||0,diff=now-lastTapRef.current;
+    if(diff<300){
+      // ── Double tap: skip + gesture + immediately UI_OFF ──
+      if(tapTimeoutRef.current){clearTimeout(tapTimeoutRef.current);tapTimeoutRef.current=null}
+      const rect=e.currentTarget.getBoundingClientRect(),mid=rect.left+rect.width/2;
+      const dir=x<mid?"back":"forward";
+      doSkip(dir);
+      showGesture(dir);
+      // Immediately go UI_OFF on gesture
+      setUiState(S.UI_OFF);
+      clearAutoHide();
+      lastTapRef.current=0;
+    }else{
+      // ── Single tap ──
+      lastTapRef.current=now;
+      tapTimeoutRef.current=setTimeout(()=>{
+        setUiState(p=>{
+          switch(p){
+            // UI_OFF → show all UI
+            case S.UI_OFF:startAutoHide();return S.UI_ON;
+            // UI_ON_BOTTOM → tap within 3s = dismiss
+            case S.UI_ON_BOTTOM:clearAutoHide();return S.UI_OFF;
+            // UI_ON → tap within 3s = dismiss immediately
+            case S.UI_ON:clearAutoHide();return S.UI_OFF;
+            // PAUSED → dismiss
+            case S.PAUSED:clearAutoHide();return S.UI_OFF;
+            default:return p;
+          }
+        });
+        tapTimeoutRef.current=null;
+      },300);
+    }
+  },[doSkip,showGesture,startAutoHide,clearAutoHide]);
+
+  // Play/Pause
+  const handlePlayPause=useCallback(()=>{
+    if(isPlaying){setIsPlaying(false);setUiState(S.PAUSED);clearAutoHide()}
+    else{setIsPlaying(true);setUiState(S.UI_ON);startAutoHide()}
+  },[isPlaying,clearAutoHide,startAutoHide]);
+
+  // Skip button
+  const handleSkipBtn=useCallback(dir=>{
+    doSkip(dir);
+    setSkipPressed(dir);
+    setTimeout(()=>setSkipPressed(null),400);
+    resetTimer();
+  },[doSkip,resetTimer]);
+
+  // Sound toggle: ON → OFF → MUTE → ON
+  const handleSound=useCallback(()=>{
+    setSoundState(s=>s===SOUND.ON?SOUND.OFF:SOUND.ON);
+    resetTimer();
+  },[resetTimer]);
+
+  // Progress
+  const calcProgress=useCallback(clientX=>{
+    if(!progressRef.current)return;
+    const r=progressRef.current.getBoundingClientRect();
+    setCurrentTime(Math.max(0,Math.min(1,(clientX-r.left)/r.width))*duration);
+  },[duration]);
+  const onProgressDown=useCallback(e=>{e.stopPropagation();setIsDragging(true);calcProgress(e.clientX);resetTimer()},[calcProgress,resetTimer]);
+  useEffect(()=>{
+    if(!isDragging)return;
+    const mv=e=>calcProgress(e.clientX||e.touches?.[0]?.clientX);
+    const up=()=>{setIsDragging(false);resetTimer()};
+    window.addEventListener("pointermove",mv);window.addEventListener("pointerup",up);
+    return()=>{window.removeEventListener("pointermove",mv);window.removeEventListener("pointerup",up)};
+  },[isDragging,calcProgress,resetTimer]);
+
+  // Derived
+  const pct=(currentTime/duration)*100;
+  const barW=(pct/100)*375;
+  const showBottom=uiState!==S.UI_OFF;
+  const showCenter=uiState===S.UI_ON||uiState===S.PAUSED;
+
+  return(
+    <div onClick={handleScreenTap} style={{
+      width:375,height:812,position:"relative",background:"#000",
+      fontFamily:'SF Pro Text,-apple-system,system-ui,sans-serif',
+      userSelect:"none",cursor:"pointer",overflow:"hidden",
+      borderRadius:44,boxShadow:"0 25px 80px rgba(0,0,0,.6)",
+    }}>
+      {/* Video BG */}
+      <div style={{position:"absolute",left:"50%",top:"50%",
+        transform:"translate(-50%,calc(-50% + 5.5px))",width:375,height:667}}>
+        <img src={A.video} style={{width:"100%",height:"100%",objectFit:"cover",pointerEvents:"none",display:"block"}} alt=""/>
+      </div>
+
+      <StatusBar/>
+      <CloseBtn/>
+      <GestureFeedback direction={gestureDir} gestureKey={gestureKey}/>
+      <Toast text={toast.text} visible={toast.visible} phase={toast.phase}/>
+
+      {/* Center Controls – use key so animation only plays on appear */}
+      {showCenter&&(
+        <div key={"center-"+uiState} data-control="true" style={{
+          position:"absolute",top:"50%",left:"50%",
+          transform:"translate(-50%,-50%)",
+          display:"flex",alignItems:"center",gap:60,zIndex:20,
+          willChange:"opacity,transform",
+          animation:"none",
+        }}>
+          <SkipBtn direction="back" onClick={()=>handleSkipBtn("back")} pressed={skipPressed==="back"}/>
+          <PlayPauseIcon isPlaying={isPlaying} onClick={handlePlayPause}/>
+          <SkipBtn direction="forward" onClick={()=>handleSkipBtn("forward")} pressed={skipPressed==="forward"}/>
+        </div>
+      )}
+
+      {/* Bottom Controller – progress bar bottom edge = bottom:67 from device */}
+      <div data-control="true" onClick={e=>e.stopPropagation()} style={{
+        position:"absolute",bottom:67,left:0,width:375,zIndex:20,
+        display:"flex",flexDirection:"column",
+        background:showBottom?"linear-gradient(to bottom,rgba(0,0,0,0),rgba(0,0,0,0.25))":"none",
+      }}>
+        {/* Time + Sound row – tight gap to progress bar */}
+        {showBottom&&(
+          <div style={{
+            display:"flex",justifyContent:"space-between",alignItems:"center",
+            padding:"0 12px 0 16px", marginBottom:2,
+            animation:"none",
+          }}>
+            <div style={{display:"flex",gap:4,alignItems:"center",
+              fontWeight:600,fontSize:13,color:"#fff",textShadow:"0 0 1px rgba(0,0,0,.25)",
+              letterSpacing:-.13,whiteSpace:"nowrap"}}>
+              <span>{fmt(currentTime)}</span>
+              <span style={{opacity:.6}}>/ {fmt(duration)}</span>
+            </div>
+            <div onClick={handleSound}
+              style={{width:24,height:24,cursor:"pointer",
+                filter:"drop-shadow(0 0 1.5px rgba(0,0,0,.3))"}}>
+              <SoundIcon soundState={soundState}/>
+            </div>
+          </div>
+        )}
+        {/* Progress Bar – 4px bar flush at bottom, 10px touch padding above */}
+        <div ref={progressRef} onPointerDown={onProgressDown}
+          style={{width:"100%",paddingTop:10,cursor:"pointer",touchAction:"none"}}>
+          <div style={{width:"100%",height:4,position:"relative",background:"rgba(255,255,255,.3)"}}>
+            <div style={{position:"absolute",left:0,top:0,width:barW,height:4,background:"#fff",
+              borderTopRightRadius:4,borderBottomRightRadius:4,
+              transition:(isDragging||skipJump)?"none":"width .15s linear"}}/>
+          </div>
+        </div>
+      </div>
+
+      <HomeIndicator/>
+
+      {/* Debug status bar */}
+      <div style={{position:"absolute",top:48,left:14,zIndex:55,pointerEvents:"none",
+        background:"rgba(0,0,0,.65)",borderRadius:6,padding:"4px 10px",
+        fontSize:10,color:"#fff",fontFamily:"SF Mono,monospace",fontWeight:600,letterSpacing:.3,
+        display:"flex",gap:8,alignItems:"center"}}>
+        <span style={{color:uiState===S.UI_OFF?"#888":"#4f4"}}>{uiState===S.UI_OFF?"UI OFF":uiState===S.UI_ON_BOTTOM?"UI BOTTOM":"UI ON"}</span>
+        <span style={{color:"rgba(255,255,255,0.2)"}}>|</span>
+        <span style={{color:isPlaying?"#4f4":"#f94"}}>{isPlaying?"PLAY":"PAUSE"}</span>
+        <span style={{color:"rgba(255,255,255,0.2)"}}>|</span>
+        <span style={{color:soundState===SOUND.ON?"#4f4":"#f66"}}>{soundState===SOUND.ON?"SOUND ON":"SOUND OFF"}</span>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<MediaPlayer/>);
+</script>
+</body>
+</html>
